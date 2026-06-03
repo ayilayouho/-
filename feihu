@@ -1,0 +1,102 @@
+
+import baostock as bs
+import pandas as pd
+import logging
+
+# 配置日志记录
+logging.basicConfig(filename='data_processing.log', level=logging.WARNING)
+
+# 登录系统
+lg = bs.login()
+print('login respond error_code:', lg.error_code)
+print('login respond  error_msg:', lg.error_msg)
+
+# 股票代码列表
+stock_codes =["sh.600955", "sz.300041", "sh.600519","sh.603014","sz.301202","sz.002571","sh.512690","sh.600023","sz.300236"]
+
+# 定义一个函数来检查是否是停牌日
+def is_trading_suspension(row):
+    # 如果 volume 为 0 或空字符串，且 open, high, low, close 中任何一个为 0 或空字符串，则认为是停牌日
+    if row['volume'].strip() == '0' or row['volume'].strip() == '':
+        if any(field.strip() in ['0', ''] for field in [row['open'], row['high'], row['low'], row['close']]):
+            return True
+    return False
+
+# 遍历每个股票代码
+for stock_code in stock_codes:
+    # 获取沪深A股历史K线数据
+    rs = bs.query_history_k_data_plus(
+        stock_code,
+        "date,open,high,low,close,volume,amount",
+        start_date='2025-08-30', 
+        end_date='2026-05-12',
+        frequency="d", 
+        adjustflag="3"
+    )
+    print(f'query_history_k_data_plus respond error_code for {stock_code}:', rs.error_code)
+    print(f'query_history_k_data_plus respond  error_msg for {stock_code}:', rs.error_msg)
+
+    # 创建一个列表来存储数据
+    data_list = []
+
+    # 循环读取数据并存储到列表中
+    while (rs.error_code == '0') & rs.next():
+        data_list.append(rs.get_row_data())
+
+    # 创建DataFrame
+    result = pd.DataFrame(data_list, columns=rs.fields)
+
+    # 格式化输出数据
+    formatted_lines = ["1970/01/01 0.00 0.00 0.00 0.00 0.00 0.00\n"]
+
+    # 遍历DataFrame并格式化每一行数据
+    for _, row in result.iterrows():
+        # 检查是否是停牌日，如果是则跳过
+        if is_trading_suspension(row):
+            logging.warning(f"Trading suspension detected for {stock_code} on {row['date']}, skipping this day.")
+            continue
+
+        date = row['date'].replace('-', '/')  # 更改日期格式
+        open_price = "{:.2f}".format(float(row['open']))
+        high_price = "{:.2f}".format(float(row['high']))
+        low_price = "{:.2f}".format(float(row['low']))
+        close_price = "{:.2f}".format(float(row['close']))
+
+        # 检查 volume 是否为空字符串，并进行相应处理
+        if row['volume'].strip() == '':
+            volume = '0'  # 如果 volume 为空，设为 0
+            logging.warning(f"Volume is empty for {stock_code} on {date}, set to 0.")
+        else:
+            try:
+                volume = str(int(float(row['volume'])))  # 确保 volume 是有效的数字
+            except ValueError:
+                volume = '0'
+                logging.warning(f"Invalid volume value for {stock_code} on {date}, set to 0.")
+
+        # 检查 amount 是否为空字符串，并进行相应处理
+        if row['amount'].strip() == '':
+            amount = '0.00'  # 如果 amount 为空，设为 0.00
+            logging.warning(f"Amount is empty for {stock_code} on {date}, set to 0.00.")
+        else:
+            try:
+                amount = "{:.2f}".format(float(row['amount']))  # 确保 amount 是有效的数字
+            except ValueError:
+                amount = '0.00'
+                logging.warning(f"Invalid amount value for {stock_code} on {date}, set to 0.00.")
+
+        # 使用字符串格式化输出数据
+        formatted_line = f"{date} {open_price} {high_price} {low_price} {close_price} {volume} {amount}\n"
+        formatted_lines.append(formatted_line)
+
+    # 构造文件路径
+    stock_code_cleaned = stock_code.replace('.', '')
+    output_file_path = f'C:\\TXTDAY\\{stock_code_cleaned}.TXT'
+
+    # 将数据写入文本文件
+    with open(output_file_path, 'w', encoding='utf-8') as f:
+        f.writelines(formatted_lines)
+
+    print(f'Data for {stock_code} has been saved to {output_file_path}')
+
+# 结束系统连接
+bs.logout()
